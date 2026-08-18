@@ -27,7 +27,7 @@ DSH(DeepSeek Harness)Web 客户端插件:每次 AI 回复完成时在浏览器�
    // package.json
    {
      "dependencies": {
-       "dsh-client-ui-turn-chime": "github:<你的用户名>/dsh-client-ui-turn-chime"
+       "dsh-client-ui-turn-chime": "github:liuyun847/dsh-client-ui-turn-chime"
      }
    }
    ```

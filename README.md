@@ -57,7 +57,6 @@ DSH(DeepSeek Harness)Web 客户端插件:AI 回复**真正结束**时在浏览�
 > v0.3.0 起判定为"回复完成 + 无运行中子代理";v0.2.0 起使用标准 props 的
 > `useSession`(适配 DSH 0.1.2-rc.1 slots 契约)。
 > 提示音播放依赖浏览器 AudioContext,需用户交互后解锁。
-> (v0.3.2 验证:跨行变量写盘场景)
 
 - 通过 `dsh.client` 声明(见 `package.json`)注册为浏览器端插件。
 - 在 `conversation.composer.dock` 座位注册一个不渲染 UI 的监听组件:用会话标准 props `useSession` 订阅 `running` 与 `sessionId`,用全局 `useSessions` 读取会话列表快照 `byId`。

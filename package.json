@@ -1,7 +1,7 @@
 {
   "name": "dsh-client-ui-turn-chime",
-  "description": "DSH Web 客户端插件:每次 AI 回复完成(会话快照 running 由 true 变 false)时在浏览器播放一声双音提示音",
-  "version": "0.2.0",
+  "description": "DSH Web 客户端插件:AI 回复完成(会话快照 running 由 true 变 false)且当前会话没有运行中的后代子代理时才在浏览器播放一声双音提示音(协调者预设下派发后台子代理后的等待不再误响)",
+  "version": "0.3.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

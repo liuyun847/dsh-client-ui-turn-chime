@@ -23,34 +23,33 @@ DSH(DeepSeek Harness)Web 客户端插件:AI 回复**真正结束**时在浏览�
 
 ## 使用
 
-安装并注册后,AI 回复结束即自动播放提示音,无其他配置。
+安装并启用后(AI 回复结束即自动播放提示音),无其他配置。
 
 ## 安装
 
-在 DSH profile 目录(例如 `~/.dsh/profiles/web/`)下:
+本包是**组合包(bundle)**:注册行(`id: turn-chime`)随包发布在包内 `cordis.patch.yml` 里,
+宿主按 profile `package.json` 的 `dsh.profile.bundles` 加载 —— **不需要**再往 profile 的
+`cordis.patch.yml` 里贴任何 `- insert:` 行。
 
-1. 添加依赖:
+在 profile 目录(如 `~/.dsh/profiles/desktop/`)下执行:
 
-   ```jsonc
-   // package.json
-   {
-     "dependencies": {
-       "dsh-client-ui-turn-chime": "github:liuyun847/dsh-client-ui-turn-chime"
-     }
-   }
-   ```
+```powershell
+dshpm add file:./plugins/dsh-client-ui-turn-chime --profile desktop
+```
 
-   然后 `pnpm install`(或 `npm install`)。
+`dshpm` 是替代 `dsh plugin add` 的装卸 CLI,装包的同时会把包名写进 `dsh.profile.bundles`。
+装完重启 dsh,刷新页面后生效。
 
-2. 在 `cordis.patch.yml` 中注册插件行:
-
-   ```yaml
-   - insert:
-       - id: turn-chime
-         name: 'dsh-client-ui-turn-chime'
-   ```
-
-3. 重启 `dsh web`,刷新页面后生效。
+- **启停**:插件页 →「已安装」区里本卡的总开关(写 `dsh.profile.bundles`);
+  点开卡片后每一行还有行级开关(向 profile 的 `cordis.patch.yml` 写 `disabled` 覆盖 ——
+  profile 层在包层之后应用,所以覆写优先)。
+- **卸载**:`dshpm remove dsh-client-ui-turn-chime --profile desktop`。
+  ⚠ 若 profile 的 pnpm 带供应链策略,`pnpm remove` 会报
+  `ERR_PNPM_RESOLUTION_POLICY_VIOLATIONS_UNHANDLED`;绕过办法是进 profile 目录直接跑
+  `pnpm remove dsh-client-ui-turn-chime --config.minimum-release-age=0`
+  (dshpm 的 `--fast` 只对 `add` 有效 —— `pnpm remove` 不接受 `--minimum-release-age` 这类参数)。
+- 发布路径不变:从 npm registry / GitHub 装(`github:liuyun847/dsh-client-ui-turn-chime` 或
+  `^0.3.0`)时,同样只要包名在 `dsh.profile.bundles` 里,注册行由包内 `cordis.patch.yml` 提供。
 
 ## 工作原理
 
@@ -72,10 +71,17 @@ DSH(DeepSeek Harness)Web 客户端插件:AI 回复**真正结束**时在浏览�
 
 - 本包以 `plugins/dsh-client-ui-turn-chime/` 为**活源**,运行时加载
   `node_modules/dsh-client-ui-turn-chime/` 下的 **file: 拷贝**(二者独立),
-  改活源后必须把 `lib/`、`package.json`、`README.md`、`tests/` 同步到副本。
+  改活源后必须把 `lib/`、`package.json`、`cordis.patch.yml`、`README.md` 同步到副本;`tests/` 不进副本(白名单不含),从源码目录跑。
+  (本包 8/8 共享文件 2026-09-26 实测**均为独立拷贝**,两侧 `fileId` 不同属正常 —— 不要去重建
+  硬链接。全机机制见 `dsh-plugin-manager\README.md`「本地 `file:` 插件的落盘形态」。)
 - DSH 默认挂载 `@deepseek-ai/dsh-client-hmr`(500 ms stat 轮询图内 bundle):
   写入副本的 `lib/client.js` 后,运行中的页面会**原地重载本插件**,无需重启
   `dsh web`、无需刷新页面;控制台可见 `[turn-chime] v0.3.0 已加载` 确认。
+- 包内 `cordis.patch.yml` 属**包层 patch**,改它不需要重启 `dsh web`,但它**不会自己触发重组合**:
+  dsh-hmr 只监视 profile 的 `cordis.patch.yml`、home 层 `cordis.patch.yml` 与 profile 的 `package.json`
+  三个输入(`dsh-hmr/lib/index.js:353-376`),包内文件不在其中;重组合时会重读全部 bundle 层,所以改完
+  要在插件页点一下本卡(或任意行级)开关、或保存 profile patch 的任意一处改动才会被读入。
+  只有宿主侧接线(如 `package.json` 的 `dsh` 声明)改了才需要重新安装/重启。
 - 若 HMR 未生效(未挂载或监听失败),再重启 `dsh web` 并刷新页面。
 
 ## 开发

@@ -76,13 +76,13 @@ dshpm add file:./plugins/dsh-client-ui-turn-chime --profile desktop
   硬链接。全机机制见 `dsh-plugin-manager\README.md`「本地 `file:` 插件的落盘形态」。)
 - DSH 默认挂载 `@deepseek-ai/dsh-client-hmr`(500 ms stat 轮询图内 bundle):
   写入副本的 `lib/client.js` 后,运行中的页面会**原地重载本插件**,无需重启
-  `dsh web`、无需刷新页面;控制台可见 `[turn-chime] v0.3.0 已加载` 确认。
-- 包内 `cordis.patch.yml` 属**包层 patch**,改它不需要重启 `dsh web`,但它**不会自己触发重组合**:
+  DSH(桌面端:关掉再打开 DeepSeek Harness 窗口)、无需刷新页面;控制台可见 `[turn-chime] v0.3.0 已加载` 确认。
+- 包内 `cordis.patch.yml` 属**包层 patch**,改它不需要重启 DSH(桌面端:关掉再打开 DeepSeek Harness 窗口),但它**不会自己触发重组合**:
   dsh-hmr 只监视 profile 的 `cordis.patch.yml`、home 层 `cordis.patch.yml` 与 profile 的 `package.json`
   三个输入(`dsh-hmr/lib/index.js:353-376`),包内文件不在其中;重组合时会重读全部 bundle 层,所以改完
   要在插件页点一下本卡(或任意行级)开关、或保存 profile patch 的任意一处改动才会被读入。
   只有宿主侧接线(如 `package.json` 的 `dsh` 声明)改了才需要重新安装/重启。
-- 若 HMR 未生效(未挂载或监听失败),再重启 `dsh web` 并刷新页面。
+- 若 HMR 未生效(未挂载或监听失败),再重启 DSH(桌面端:关掉再打开 DeepSeek Harness 窗口) 并刷新页面。
 
 ## 开发
 

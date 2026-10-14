@@ -1,9 +1,10 @@
 /**
- * 纯函数单测:活跃子代理计数 countRunningDescendants。
+ * 纯函数单测:活跃子代理计数 countRunningDescendants、待介入标识 pendingKeyOf、
+ * 单会话判定状态机 stepChime、多会话全局求值 stepAll。
  *
  * client.js 是浏览器 bundle(顶层调用 window.__ModuleLoader__.load),
  * 这里先注入 window 桩与 react 桩,再动态 import 取 factory 的返回值,
- * 通过 __test 导出直接测计数逻辑(不渲染任何组件)。
+ * 通过 __test 导出直接测纯逻辑(不渲染任何组件)。
  *
  * 运行:node tests/descendants.test.mjs
  */
@@ -153,18 +154,71 @@ test("原型链上的键不被误当成会话行 → 只计自有键", () => {
   equal(count(Object.create({ only: row("only", ROOT, true) }), ROOT), 0, "纯继承对象计 0");
 });
 
-// ── 判定状态机(stepChime)用例 ──────────────────────────────────────
+// ── 待介入标识(pendingKeyOf)用例 ───────────────────────────────────
+const pendingKeyOf = mod.__test?.pendingKeyOf;
+if (typeof pendingKeyOf !== "function") throw new Error("缺少 __test.pendingKeyOf 导出");
+
+test("没有会话状态 / 没有待介入 → undefined", () => {
+  equal(pendingKeyOf(undefined), undefined);
+  equal(pendingKeyOf(null), undefined);
+  equal(pendingKeyOf({ running: true }), undefined);
+  equal(pendingKeyOf({ running: true, pendingInteraction: undefined }), undefined);
+  equal(pendingKeyOf({ running: true, pendingInteraction: null }), undefined);
+});
+
+test("待答卡片取 key(问题卡自带稳定 key)", () => {
+  equal(pendingKeyOf({ running: true, pendingInteraction: { kind: "question", key: "q:1" } }), "q:1");
+});
+
+test("待批对象取 key(approval:<n>)", () => {
+  equal(pendingKeyOf({ running: true, pendingInteraction: { kind: "approval", key: "approval:3" } }), "approval:3");
+});
+
+test("无 key 时退回 callId,再退回 kind", () => {
+  equal(pendingKeyOf({ pendingInteraction: { kind: "question", callId: "call-7" } }), "call-7");
+  equal(pendingKeyOf({ pendingInteraction: { kind: "plan-review" } }), "plan-review");
+});
+
+test("形状完全陌生时也会给一个非空标识(不退化成永不响)", () => {
+  equal(pendingKeyOf({ pendingInteraction: {} }), "pending");
+  equal(pendingKeyOf({ pendingInteraction: { key: null, callId: null, kind: null } }), "pending");
+});
+
+// ── 单会话判定状态机(stepChime)用例 ────────────────────────────────
 const step = mod.__test?.stepChime;
 if (typeof step !== "function") throw new Error("缺少 __test.stepChime 导出");
 
-/** 按 [running, activeSubagents] 序列推进状态机,返回响铃次数与末态。 */
-function simulate(initial, steps) {
+/** 造一个"上一轮状态"对象,未给字段取默认值。 */
+function S(overrides) {
+  return {
+    lastRunning: false,
+    lastChimedPendingKey: undefined,
+    pending: false,
+    chimedForTurn: false,
+    ...overrides,
+  };
+}
+
+/**
+ * 按步推进状态机,返回响铃次数与末态。
+ * @param initial 初始状态(四字段);undefined = 本页第一次见到该会话
+ * @param steps [running, activeSubagents] 序列
+ * @param pendingKeys 待介入标识序列(缺省 = 全程没有人等你)
+ */
+function simulate(initial, steps, pendingKeys) {
   let state = initial;
   let chimes = 0;
-  for (const [running, active] of steps) {
-    const next = step(state, running, active);
+  for (let i = 0; i < steps.length; i++) {
+    const [running, active] = steps[i];
+    const key = pendingKeys === undefined ? undefined : pendingKeys[i];
+    const next = step(state, running, active, key);
     if (next.chime) chimes += 1;
-    state = { lastRunning: next.lastRunning, pending: next.pending };
+    state = {
+      lastRunning: next.lastRunning,
+      lastChimedPendingKey: next.lastChimedPendingKey,
+      pending: next.pending,
+      chimedForTurn: next.chimedForTurn,
+    };
   }
   return { chimes, state };
 }
@@ -222,11 +276,223 @@ test("锁行为:父停时子行尚未计入会提前响一次(时序上不可达
   equal(simulate({ lastRunning: false, pending: false }, steps).chimes, 1);
 });
 
-test("client.js 已按 v0.3.0 声明版本注释", () => {
+// ── 待介入(待答/待批/计划待审)路径 ────────────────────────────────
+test("待答出现立刻响:running 仍为 true 也响", () => {
+  const { chimes } = simulate(
+    { lastRunning: true, pending: false },
+    [[true, 0], [true, 0], [true, 0]],
+    [undefined, "q:1", "q:1"]
+  );
+  equal(chimes, 1, "出现那次响一次,标识不变不重复响");
+});
+
+test("ask 阻塞的真实时序:问→答→收尾,全程只响一次(收尾静音)", () => {
+  const { chimes, state } = simulate(
+    { lastRunning: true, pending: false },
+    [[true, 0], [true, 0], [true, 0], [true, 0], [false, 0], [false, 0]],
+    [undefined, "q:1", "q:1", undefined, undefined, undefined]
+  );
+  equal(chimes, 1, "只在提问那一刻响");
+  equal(state.chimedForTurn, false, "收尾时标记已清");
+});
+
+test("同一轮里第二次提问会再响一次 → 共 2 次", () => {
+  const { chimes } = simulate(
+    { lastRunning: true, pending: false },
+    [[true, 0], [true, 0], [true, 0], [true, 0], [true, 0], [false, 0]],
+    [undefined, "q:1", undefined, "q:2", undefined, undefined]
+  );
+  equal(chimes, 2);
+});
+
+test("待批(approval)与计划待审(plan-review)同样触发", () => {
+  equal(
+    simulate({ lastRunning: true, pending: false }, [[true, 0], [true, 0]], [undefined, "approval:1"]).chimes,
+    1
+  );
+  equal(
+    simulate({ lastRunning: true, pending: false }, [[true, 0], [true, 0]], [undefined, "plan-review"]).chimes,
+    1
+  );
+});
+
+test("待介入不受子代理门控:后台还有 3 个子代理在跑也照样响", () => {
+  const { chimes } = simulate(
+    { lastRunning: true, pending: false },
+    [[true, 3], [true, 3], [false, 3], [false, 0]],
+    [undefined, "q:1", undefined, undefined]
+  );
+  equal(chimes, 1, "提问时响;该轮收尾即便子代理后来归零也不再补响");
+});
+
+test("待介入未出现时,收尾仍然照旧响一次(回归)", () => {
+  const { chimes } = simulate(
+    { lastRunning: true, pending: false },
+    [[true, 0], [true, 0], [false, 0]],
+    [undefined, undefined, undefined]
+  );
+  equal(chimes, 1);
+});
+
+test("组件被重挂(state 保留在模块级)时不丢判定:同一标识仍只响一次", () => {
+  const first = step(undefined, true, 0, "q:1");
+  equal(first.chime, true, "state 缺省 = 本页第一次见到它 → 响");
+  equal(step(first, true, 0, "q:1").chime, false);
+  equal(step(step(first, true, 0, "q:1"), true, 0, "q:1").chime, false);
+});
+
+test("本页第一次见到某会话:带着未答问题(刷新页面)也响一次", () => {
+  equal(step(undefined, true, 0, "q:1").chime, true);
+  equal(step(undefined, false, 0, "approval:2").chime, true);
+});
+
+test("第一次见到的会话没有待介入则不响(基线)", () => {
+  const base = step(undefined, false, 0, undefined);
+  equal(base.chime, false);
+  equal(base.lastChimedPendingKey, undefined);
+});
+
+test("待介入标识换了另一个(连问两题不经过 undefined)也响一次", () => {
+  const { chimes } = simulate(
+    { lastRunning: true, pending: false },
+    [[true, 0], [true, 0], [true, 0]],
+    [undefined, "q:1", "q:2"]
+  );
+  equal(chimes, 2);
+});
+
+// ── 全局多会话求值(stepAll)用例 ───────────────────────────────────
+const stepAll = mod.__test?.stepAll;
+if (typeof stepAll !== "function") throw new Error("缺少 __test.stepAll 导出");
+
+/** 造 uiSession.sessionStatus 快照(Map<sessionId, {running, pendingInteraction}>) */
+function statusMap(entries) {
+  const map = new Map();
+  for (const id of Object.keys(entries)) map.set(id, entries[id]);
+  return map;
+}
+/** 造一行会话摘要(用户会话或子代理)。 */
+function sessionRow(id, origin, running, parentId) {
+  const row = { id, origin, running, displayTitle: id, blank: false, updatedAt: 0 };
+  if (parentId !== undefined) row.parentId = parentId;
+  return row;
+}
+
+test("全局:后台会话(非 subagent)收尾也响", () => {
+  const byId = { a: sessionRow("a", "user", false) };
+  const states = new Map([["a", S({ lastRunning: true })]]);
+  const result = stepAll(states, byId, statusMap({ a: { running: false } }), true);
+  equal(result.chime, true, "后台会话收尾要响");
+  equal(result.states.get("a").lastRunning, false);
+});
+
+test("全局:同一轮多个会话收尾只算一声(调用方只播一次)", () => {
+  const byId = { a: sessionRow("a", "user", false), b: sessionRow("b", "user", false) };
+  const states = new Map([["a", S({ lastRunning: true })], ["b", S({ lastRunning: true })]]);
+  const first = stepAll(states, byId, statusMap({ a: { running: false }, b: { running: false } }), true);
+  equal(first.chime, true, "合并成一声");
+  const again = stepAll(first.states, byId, statusMap({ a: { running: false }, b: { running: false } }), true);
+  equal(again.chime, false, "两个会话的状态都已推进,不会连响");
+});
+
+test("全局:子代理会话自己不算(它的收尾由父会话补响覆盖)", () => {
+  const byId = { child: sessionRow("child", "subagent", false, "root") };
+  const states = new Map([["child", S({ lastRunning: true })]]);
+  const result = stepAll(states, byId, statusMap({ child: { running: false } }), true);
+  equal(result.chime, false);
+  equal(result.states.has("child"), false, "子代理不留在判定状态里");
+});
+
+test("全局:父会话收尾时子代理仍在跑不响,子代理结束才补响", () => {
+  const running = {
+    p: sessionRow("p", "user", false),
+    c: sessionRow("c", "subagent", true, "p"),
+  };
+  const first = stepAll(
+    new Map([["p", S({ lastRunning: true })]]),
+    running,
+    statusMap({ p: { running: false }, c: { running: true } }),
+    true
+  );
+  equal(first.chime, false, "还有子代理在跑 → 挂起");
+  equal(first.states.get("p").pending, true);
+
+  const settled = {
+    p: sessionRow("p", "user", false),
+    c: sessionRow("c", "subagent", false, "p"),
+  };
+  const after = stepAll(first.states, settled, statusMap({ p: { running: false }, c: { running: false } }), true);
+  equal(after.chime, true, "子代理归零后补响");
+});
+
+test("全局:后台会话出现待答即响(running 仍为 true)", () => {
+  const byId = { a: sessionRow("a", "user", true) };
+  const result = stepAll(
+    new Map(),
+    byId,
+    statusMap({ a: { running: true, pendingInteraction: { kind: "question", key: "q:9" } } }),
+    true
+  );
+  equal(result.chime, true);
+});
+
+test("全局:后台会话待答不受该会话子代理门控", () => {
+  const byId = {
+    a: sessionRow("a", "user", true),
+    a1: sessionRow("a1", "subagent", true, "a"),
+  };
+  const result = stepAll(
+    new Map(),
+    byId,
+    statusMap({
+      a: { running: true, pendingInteraction: { kind: "approval", key: "approval:1" } },
+      a1: { running: true },
+    }),
+    true
+  );
+  equal(result.chime, true);
+});
+
+test("全局:只有状态表里存在的会话也照看", () => {
+  const result = stepAll(new Map([["z", S({ lastRunning: true })]]), {}, statusMap({ z: { running: false } }), true);
+  equal(result.chime, true);
+});
+
+test("全局:列表未就绪(prune=false)时不丢未知会话的状态", () => {
+  const states = new Map([["gone", S({ lastRunning: true })]]);
+  const result = stepAll(states, {}, statusMap({}), false);
+  equal(result.states.has("gone"), true, "保留基线");
+  equal(result.chime, false, "没有可判定的会话就不响");
+});
+
+test("全局:列表已就绪(prune=true)时丢掉消失会话的状态", () => {
+  const states = new Map([["gone", S({ lastRunning: true })]]);
+  const result = stepAll(
+    states,
+    { keep: sessionRow("keep", "user", false) },
+    statusMap({ keep: { running: false } }),
+    true
+  );
+  equal(result.states.has("gone"), false);
+  equal(result.states.has("keep"), true);
+});
+
+test("全局:两边都拿不到 running 的会话跳过、不建状态", () => {
+  const result = stepAll(new Map(), { x: { id: "x", origin: "user" } }, statusMap({}), true);
+  equal(result.states.has("x"), false);
+  equal(result.chime, false);
+});
+
+test("client.js 已按 v0.5.0 声明版本注释", () => {
   const source = readFileSync(CLIENT_PATH, "utf8");
   if (!source.includes("countRunningDescendants")) throw new Error("缺少 countRunningDescendants 实现");
   if (!source.includes("stepChime")) throw new Error("缺少 stepChime 状态机");
-  if (!source.includes("[turn-chime] v0.3.0 已加载")) throw new Error("缺少 v0.3.0 加载日志");
+  if (!source.includes("stepAll")) throw new Error("缺少 stepAll 全局求值");
+  if (!source.includes("pendingKeyOf")) throw new Error("缺少 pendingKeyOf 待介入标识");
+  if (!source.includes("useSessionStatus")) throw new Error("缺少 useSessionStatus 订阅");
+  if (!source.includes("sessionStatus")) throw new Error("缺少 uiSession.sessionStatus 全局订阅");
+  if (!source.includes("chimeStates")) throw new Error("缺少模块级判定状态 chimeStates");
+  if (!source.includes("[turn-chime] v0.5.0 已加载")) throw new Error("缺少 v0.5.0 加载日志");
 });
 
 // ── 汇总 ────────────────────────────────────────────────────────────
